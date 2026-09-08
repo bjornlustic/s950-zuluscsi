@@ -68,6 +68,7 @@
 #include "custom_vendor_inquiry.h"
 #include "vhd_support.h"
 #include <ZuluSCSI_WebUI.h>
+#include "SuperOS_loader.h"
 
 #include "ui.h"
 
@@ -1416,6 +1417,7 @@ static void reinitSCSI()
       if (scsiDev.boardCfg.wifiSSID[0] != '\0')
       {
         platform_network_wifi_join(scsiDev.boardCfg.wifiSSID, scsiDev.boardCfg.wifiPassword, false);
+        superos_loader_init();
       }
       else
       {
@@ -2007,9 +2009,6 @@ static void spin_for_reboot(bool rebooting)
 
 extern "C" void zuluscsi_main_loop(void)
 {
-    // While timer for reboot is going, attempt to close SD images
-  spin_for_reboot(g_rebooting);
-
   static uint32_t sd_card_check_time = 0;
   static uint32_t last_request_time = 0;
 
@@ -2019,23 +2018,32 @@ extern "C" void zuluscsi_main_loop(void)
 #endif
 
   platform_reset_watchdog();
+  blink_poll();
+
+#ifdef ZULUSCSI_NETWORK
+  // SuperOS loader: the Wi-Fi driver is serviced here on core 0 while core 1 may own the
+  // SD card. While it is lent out, nothing below this point may run (SCSI target, log
+  // save, SD hotplug, image swap, console menu), so return early and keep polling.
+  platform_network_poll();
+  superos_loader_poll();
+  if (superos_loader_sd_lent())
+    return;
+#endif // ZULUSCSI_NETWORK
+
+    // While timer for reboot is going, attempt to close SD images
+  spin_for_reboot(g_rebooting);
+
   platform_poll();
 
   control_disk_swap();
 
   if (!is_initiator)
     diskEjectButtonUpdate(true);
-  blink_poll();
-
 
   if (g_displayEnabled && scsiDev.phase == BUS_FREE)
   {
     controlLoop();
   }
-
-#ifdef ZULUSCSI_NETWORK
-  platform_network_poll();
-#endif // ZULUSCSI_NETWORK
 
 #ifdef PLATFORM_HAS_INITIATOR_MODE
   if (is_initiator)

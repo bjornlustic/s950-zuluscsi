@@ -1,0 +1,29 @@
+# SuperOS-ZuluSCSIPicoSlim
+
+Fork of ZuluSCSI-firmware (GPL 3) for the ZuluSCSI Pico 2 W Slim on the Akai S1000. Adds `src/SuperOS_loader.*`: a raw-frame ARP + ICMP + UDP service on the Wi-Fi interface (the firmware has no lwIP; DaynaPORT frames are raw) that reads and writes byte ranges of the mounted images while the sampler runs. Writes happen only when the SCSI bus is free and invalidate the read prefetch cache, so the S1000 sees them on its next DISK page entry.
+
+Hooks: `cyw43_cb_process_ethernet` (frame intercept), `superos_loader_init()` after Wi-Fi join, `superos_loader_poll()` in the main loop.
+
+```bash
+pio run -e ZuluSCSI_Pico_2_DaynaPORT          # .pio/build/ZuluSCSI_Pico_2_DaynaPORT/firmware.uf2
+# flash: console 'u','y' -> RP2350 volume appears -> copy firmware.uf2 there
+```
+
+zuluscsi.ini: `[SCSI] WiFiSSID / WiFiPassword`, a `NE6.img` in the image dir so the network device initialises Wi-Fi, optional `LoaderIP = "192.168.1.250"` (default). UDP port 5150; protocol in `SuperOS_loader.h`; host client `AkaiS1000/tools/zulu_udp.py`.
+
+Measured 2026-09-07: ping 30-250 ms; writes 90 KB/s stop-and-wait, 220-380 KB/s with the 8-deep request ring, 1400 B chunks, 6-packet host window and 32 KB write coalescing; verified read-back; S1000 on the bus throughout. Remaining limit is the cyw43 driver being polled from the main loop.
+
+2026-09-08: Wi-Fi power save disabled once the link is up (`cyw43_wifi_pm(CYW43_NONE_PM)` in `superos_loader_poll`): ping 30-250 ms -> 6-20 ms. Request ring 24, host window 16 x 1440 B (frames above ~1510 B are dropped by the receive path), 8 KB SD writes: 150-810 KB/s, variance from SD-write stalls of the polled driver. Next step for a steady 1 MB/s: SD writes on core 1, cyw43 stays on core 0 (research memo: cyw43 must be used from the core that initialised it).
+## Core 1 SD writer (2026-09-08)
+
+SD writes moved off the core that services the Wi-Fi chip. Core 0 keeps every cyw43 call (rx callback, `platform_network_send`, `cyw43_arch_poll`, `cyw43_wifi_pm`), parses requests, stages WRITE data into RAM and sends all replies; core 1 does `seek`/`write`/`flush` on the image file and nothing else (no cyw43, no logging on the normal path).
+
+Queue: `SLOTS` (8) x `SLOT_SIZE` (8 KB) = 64 KB of pending writes plus the 24 x 1600 B pending-frame ring. Lock-free single-producer/single-consumer ring with three indices: `g_q_head` (core 0 publishes, the head slot is the "open" slot being coalesced), `g_q_tail` (core 1 executes), `g_q_ack` (core 0 reaps: FLUSH replies, error latch, prefetch invalidation). Every index advance is preceded by `__dmb()`; RP2350 SRAM is not cached, so that is sufficient. Core 1 is entered through the platform's existing `core1_handler` dispatcher (`multicore_fifo_push_blocking(&core1_worker)`), so it runs holding `g_core1_mutex` and `platform_write_romdrive()` still blocks core 1 before disabling XIP. The worker returns as soon as the queue is empty and core 0 re-kicks it; there is no lost wake-up because core 0 only kicks after observing `g_c1_busy == 0` and re-checks the queue afterwards.
+
+SD ownership (SdFat is not thread-safe; the SCSI target reads the same image from core 0): the card is single-owner. `superos_loader_poll()` lends it to core 1 (`g_sd_lent`, core-0-only flag) only when `scsiDev.phase == BUS_FREE` and there are queued jobs. While lent, `zuluscsi_main_loop()` runs only the watchdog, LED, `platform_network_poll()` and `superos_loader_poll()` and then returns; `scsiPoll`/`scsiDiskPoll`, `save_logfile`, SD hotplug, `control_disk_swap`, eject button, UI and `platform_poll` (console menu, which can reboot the MCU) are all skipped. Nothing outside `scsiPoll()` changes `scsiDev.phase`, so the bus stays free for the whole window; a host selection is answered when the loop resumes (same latency characteristic as the old in-loop SD write, typically one 8 KB write, about 2 ms). Core 0 takes the card back when it reads `g_c1_busy == 0`, and only then (in the same call, before `scsiPoll` can run) invalidates the prefetch for every id written (`scsiDiskPrefetchInvalidate` is called from core 0 only). `g_c1_busy` is read before the queue tail, mirroring core 1's write order (tail, dmb, busy), so "idle" implies all completions are visible. WRITE validation on core 0 uses per-image facts (`open`, `writable`, `size`) cached while core 0 owns the `FsFile` objects.
+
+ACK policy: WRITE is acked when its data is in a RAM slot (the host verifies with a read-back after FLUSH). FLUSH is queued behind the writes as a job carrying the reply address and is acked by core 0 only after core 1 has written and flushed everything before it; a latched WRITE failure turns that reply into status 3 (io error). READ and INFO wait until the queue is drained and the card is back with core 0, then run on core 0; if a partial slot is open or the queue is not drained the request stays in the pending ring and is retried on the next poll (in order). A partial slot is published and an implicit FLUSH is queued 200 ms after the last write. If core 1 has not returned for 5 s a diagnostic is logged once (the loop stays parked; a core 1 stack overflow faults via `msplim`, it does not corrupt RAM).
+
+Build 2026-09-08: RAM 85.1% (446008 B; .data 134596, .bss 311412, heap 78004), flash 13.2%. Core 1 stack is 2560 B in SCRATCH_X (`__StackOneBottom`..`__StackOneTop`). Not yet measured on hardware. Known limits: an SD write error inside SdFat/SDIO may `logmsg` from core 1 (log ring not locked, message may garble); the console 'u'/'y' reflash is not reachable while a transfer is in flight.
+
+Mailbox for direct-to-RAM: firmware tracks the last READ LBA per SCSI id (`STAT`, cmd 6); SuperOS-AkaiS1000 polls blocks 7672-7679 (see AkaiS1000/superos/src/mailbox.asm, tools/s1000_inject.py).

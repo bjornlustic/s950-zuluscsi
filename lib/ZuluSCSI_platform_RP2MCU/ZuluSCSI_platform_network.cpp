@@ -17,6 +17,7 @@
 #ifdef ZULUSCSI_NETWORK
 #include <Arduino.h>
 #include "ZuluSCSI_platform_network.h"
+#include "SuperOS_loader.h"
 #include "ZuluSCSI_log.h"
 #include "ZuluSCSI_config.h"
 #include <scsi.h>
@@ -625,6 +626,8 @@ int platform_network_wifi_channel()
 
 void cyw43_cb_process_ethernet(void *cb_data, int itf, size_t len, const uint8_t *buf)
 {
+	if (superos_loader_rx(buf, len))
+		return;
 	scsiNetworkEnqueue(buf, len);
 }
 

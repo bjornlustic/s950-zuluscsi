@@ -28,6 +28,7 @@
 // It is derived from disk.c in SCSI2SD V6.
 
 #include "ZuluSCSI_disk.h"
+#include "SuperOS_loader.h"
 #include "ZuluSCSI_log.h"
 #include "ZuluSCSI_config.h"
 #include "ZuluSCSI_settings.h"
@@ -3213,6 +3214,7 @@ void scsiDiskStartRead(uint32_t lba, uint32_t blocks)
     else
     {
         transfer.multiBlock = 1;
+        superos_loader_note_read(scsiDev.target->targetId, lba, blocks);
         transfer.lba = lba;
         transfer.blocks = blocks;
         transfer.currentBlock = 0;
