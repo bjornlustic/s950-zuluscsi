@@ -1,6 +1,8 @@
-# SuperOS-ZuluSCSIPicoSlim
+# SuperOS ZuluSCSI Wi-Fi loader
 
-Fork of ZuluSCSI-firmware (GPL 3) for the ZuluSCSI Pico 2 W Slim on the Akai S1000. Adds `src/SuperOS_loader.*`: a raw-frame ARP + ICMP + UDP service on the Wi-Fi interface (the firmware has no lwIP; DaynaPORT frames are raw) that reads and writes byte ranges of the mounted images while the sampler runs. Writes happen only when the SCSI bus is free and invalidate the read prefetch cache, so the S1000 sees them on its next DISK page entry.
+Fork of ZuluSCSI-firmware (GPL 3) for the ZuluSCSI Pico 2 W Slim, running on the Akai S950. Adds `src/SuperOS_loader.*`: a raw-frame ARP + ICMP + UDP service on the Wi-Fi interface (the firmware has no lwIP; DaynaPORT frames are raw) that reads and writes byte ranges of the mounted images while the sampler runs. Writes happen only when the SCSI bus is free and invalidate the read prefetch cache, so the sampler sees them on its next read: on the S950 under SuperOS 4.0.3 that is the once-a-second drop-box mailbox poll, and on a machine with no poller it is the next DISK page entry.
+
+The loader itself is machine-agnostic - it addresses byte ranges of an image id and knows nothing about Akai formats - which is why the same firmware and the same host client served an S1000 before the S950. Where a number below was measured with an S1000 on the bus, it says so.
 
 Hooks: `cyw43_cb_process_ethernet` (frame intercept), `superos_loader_init()` after Wi-Fi join, `superos_loader_poll()` in the main loop.
 
@@ -9,9 +11,9 @@ pio run -e ZuluSCSI_Pico_2_DaynaPORT          # .pio/build/ZuluSCSI_Pico_2_Dayna
 # flash: console 'u','y' -> RP2350 volume appears -> copy firmware.uf2 there
 ```
 
-zuluscsi.ini: `[SCSI] WiFiSSID / WiFiPassword`, a `NE6.img` in the image dir so the network device initialises Wi-Fi, optional `LoaderIP = "192.168.1.250"` (default). UDP port 5150; protocol in `SuperOS_loader.h`; host client `AkaiS1000/tools/zulu_udp.py`.
+zuluscsi.ini: `[SCSI] WiFiSSID / WiFiPassword`, a `NE6.img` in the image dir so the network device initialises Wi-Fi, optional `LoaderIP = "192.168.1.250"` (default). UDP port 5150; protocol in `SuperOS_loader.h`; host client `host/zulu_udp.py`.
 
-Measured 2026-09-07: ping 30-250 ms; writes 90 KB/s stop-and-wait, 220-380 KB/s with the 8-deep request ring, 1400 B chunks, 6-packet host window and 32 KB write coalescing; verified read-back; S1000 on the bus throughout. Remaining limit is the cyw43 driver being polled from the main loop.
+Measured 2026-09-07: ping 30-250 ms; writes 90 KB/s stop-and-wait, 220-380 KB/s with the 8-deep request ring, 1400 B chunks, 6-packet host window and 32 KB write coalescing; verified read-back; a sampler (an S1000 at that date) on the bus throughout. Remaining limit is the cyw43 driver being polled from the main loop.
 
 2026-09-08: Wi-Fi power save disabled once the link is up (`cyw43_wifi_pm(CYW43_NONE_PM)` in `superos_loader_poll`): ping 30-250 ms -> 6-20 ms. Request ring 24, host window 16 x 1440 B (frames above ~1510 B are dropped by the receive path), 8 KB SD writes: 150-810 KB/s, variance from SD-write stalls of the polled driver. Next step for a steady 1 MB/s: SD writes on core 1, cyw43 stays on core 0 (research memo: cyw43 must be used from the core that initialised it).
 ## Core 1 SD writer (2026-09-08)
@@ -26,4 +28,4 @@ ACK policy: WRITE is acked when its data is in a RAM slot (the host verifies wit
 
 Build 2026-09-08: RAM 85.1% (446008 B; .data 134596, .bss 311412, heap 78004), flash 13.2%. Core 1 stack is 2560 B in SCRATCH_X (`__StackOneBottom`..`__StackOneTop`). Not yet measured on hardware. Known limits: an SD write error inside SdFat/SDIO may `logmsg` from core 1 (log ring not locked, message may garble); the console 'u'/'y' reflash is not reachable while a transfer is in flight.
 
-Mailbox for direct-to-RAM: firmware tracks the last READ LBA per SCSI id (`STAT`, cmd 6); SuperOS-AkaiS1000 polls blocks 7672-7679 (see AkaiS1000/superos/src/mailbox.asm, tools/s1000_inject.py).
+Mailbox for direct-to-RAM: the firmware tracks the last READ LBA per SCSI id (`STAT`, cmd 6), so the host can tell whether the sampler has come round to the block it is watching. On the S950, SuperOS 4.0.3 polls block 3 of the image, the drop box's own mailbox, and the deposit that fills it is built host-side (the S950 web editor repo, `tools/s950dropbox.py`); the firmware writes the bytes and nothing more. The earlier S1000 arrangement polled blocks 7672-7679 from its own mailbox.asm.
