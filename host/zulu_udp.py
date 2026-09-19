@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
-"""Host side of the SuperOS ZuluSCSI Wi-Fi loader (SuperOS-ZuluSCSIPicoSlim/src/SuperOS_loader.*).
+"""Host side of the SuperOS ZuluSCSI Wi-Fi loader (src/SuperOS_loader.*).
 Reads and writes byte ranges of an image on the running board over UDP, no card-reader
 mode, no SCSI interruption. The board invalidates its read prefetch after every write.
 
-  zulu_udp.py info  [--id 5]
-  zulu_udp.py read  <offset> <len> [--id 5]
-  zulu_udp.py patch <file.akpatch> [--id 0]      apply an AKPATCH1 file (tools/s950wifi.py)
+  zulu_udp.py ping
+  zulu_udp.py info  [--id N]
+  zulu_udp.py read  <offset> <len> [--id N]
+  zulu_udp.py stat  [--id N]
+  zulu_udp.py patch <file.akpatch> [--id N]      apply an AKPATCH1 file
+
+SCSI id: --id, or $ZULU_ID, default 0.  Host: --host, or $ZULU_HOST, default
+192.168.1.250.  (The author's S950 image is id 0 and the S1000 image is id 5.)
 
 Library: ZuluLoader(host).write_ranges(sid, [(offset, bytes), ...]).
 
 The protocol is machine-agnostic (byte ranges of an image id), so the same
-client drives an S950, an S1000 or anything else the board serves.
+client drives an S950, an S1000 or anything else the board serves, and this
+file has no imports outside the stdlib: copy it anywhere.
 
-MIT licensed, unlike the firmware around it (GPLv3): this file is host-side
-code written for this project and shares nothing with upstream ZuluSCSI, so
-it can be copied into your own tooling freely.  A second copy lives in the
-S950 web editor repo; keep them in step if the firmware protocol changes.
+MIT licensed, unlike the firmware around it (GPLv3): it is host-side code
+written for this project and shares nothing with upstream ZuluSCSI.
+
+THIS FILE IS SHARED VERBATIM by three repos - the ZuluSCSI firmware fork
+(host/zulu_udp.py), the S950 web editor and the S1000 web editor
+(tools/zulu_udp.py).  Change it in one place and copy it to the others; the
+firmware repo is the canonical copy.
 """
 import argparse, os, socket, struct, sys, time
 
@@ -203,12 +212,33 @@ class ZuluLoader:
                 raise RuntimeError('verify failed at offset %d' % off)
 
 
+def read_patch(path):
+    """An AKPATCH1 file: magic, u32 count, then per record u64 offset,
+    u32 length, u32 crc32, data.  Kept here rather than imported from a
+    machine-specific module so this file stands alone."""
+    import zlib
+    out = []
+    with open(path, 'rb') as f:
+        if f.read(8) != b'AKPATCH1':
+            raise SystemExit('not an AKPATCH1 file: %s' % path)
+        count, = struct.unpack('<I', f.read(4))
+        for i in range(count):
+            off, length, crc = struct.unpack('<QII', f.read(16))
+            data = f.read(length)
+            if len(data) != length:
+                raise SystemExit('patch truncated in record %d' % i)
+            if (zlib.crc32(data) & 0xFFFFFFFF) != crc:
+                raise SystemExit('CRC mismatch in record %d (offset %d)' % (i, off))
+            out.append((off, data))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd', choices=['ping', 'info', 'read', 'patch', 'stat'])
     ap.add_argument('args', nargs='*')
     ap.add_argument('--host', default=os.environ.get('ZULU_HOST', '192.168.1.250'))
-    ap.add_argument('--id', type=int, default=0)
+    ap.add_argument('--id', type=int, default=int(os.environ.get('ZULU_ID', 0)))
     a = ap.parse_args()
     z = ZuluLoader(a.host)
     if a.cmd == 'ping':
@@ -220,9 +250,7 @@ def main():
     elif a.cmd == 'read':
         sys.stdout.buffer.write(z.read(a.id, int(a.args[0], 0), int(a.args[1], 0)))
     elif a.cmd == 'patch':
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import s950wifi as ak
-        writes = ak.read_patch(a.args[0])
+        writes = read_patch(a.args[0])
         total = sum(len(d) for _, d in writes)
         t = time.time()
         z.write_ranges(a.id, writes, progress=lambda n: sys.stderr.write('\r%d/%d bytes' % (n, total)))
