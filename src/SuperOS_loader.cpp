@@ -447,8 +447,7 @@ static bool g_pm_done = false;
 
 void superos_loader_poll()
 {
-    // Wi-Fi power save (driver default PM2) sleeps the chip 200 ms after each packet and
-    // costs 100+ ms per round trip. Turn it off once the link is up.
+    // Wi-Fi power save (driver default PM2) adds latency to every round trip: turn it off.
     if (!g_pm_done && cyw43_wifi_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_JOIN)
     {
         cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);

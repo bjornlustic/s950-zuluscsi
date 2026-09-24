@@ -10,21 +10,12 @@ mode, no SCSI interruption. The board invalidates its read prefetch after every 
   zulu_udp.py patch <file.akpatch> [--id N]      apply an AKPATCH1 file
 
 SCSI id: --id, or $ZULU_ID, default 0.  Host: --host, or $ZULU_HOST, default
-192.168.1.250.  (The author's S950 image is id 0 and the S1000 image is id 5.)
+192.168.1.250.
 
 Library: ZuluLoader(host).write_ranges(sid, [(offset, bytes), ...]).
 
-The protocol is machine-agnostic (byte ranges of an image id), so the same
-client drives an S950, an S1000 or anything else the board serves, and this
-file has no imports outside the stdlib: copy it anywhere.
-
-MIT licensed, unlike the firmware around it (GPLv3): it is host-side code
-written for this project and shares nothing with upstream ZuluSCSI.
-
-THIS FILE IS SHARED VERBATIM by three repos - the ZuluSCSI firmware fork
-(host/zulu_udp.py), the S950 web editor and the S1000 web editor
-(tools/zulu_udp.py).  Change it in one place and copy it to the others; the
-firmware repo is the canonical copy.
+Stdlib only. MIT licensed (the firmware around it is GPLv3).
+Shared verbatim with the S950 web editor (tools/zulu_udp.py); this copy is canonical.
 """
 import argparse, os, socket, struct, sys, time
 
@@ -35,15 +26,9 @@ STATUS = {0: 'ok', 1: 'no such image', 2: 'read only', 3: 'io error', 4: 'bad re
 CHUNK = 1440
 WINDOW = 16
 
-# Retransmit policy.  The board applies writes only when the SCSI bus is
-# free, and the S950 grabs the bus about every 4 s, so an in-flight
-# datagram can go unanswered for seconds at a time.  Measured RTT with the
-# sampler polling is 44-149 ms against 8 ms idle, so the old fixed 150 ms
-# retransmit fired at or below the real RTT and 8 attempts burned out in
-# ~1.2 s - far short of one bus-busy window, which is why pushes failed
-# mid-transfer with 'no ack for write at N'.  Back off instead, and give up
-# on a deadline rather than an attempt count.
-RTO_BASE = 0.30            # first retransmit wait, above the worst RTT
+# The board applies writes only while the SCSI bus is free, so a datagram can
+# go unanswered for seconds: back off, and give up on a deadline, not a count.
+RTO_BASE = 0.30            # first retransmit wait
 RTO_MAX = 2.0              # cap
 RTO_GROWTH = 1.7
 DEADLINE = 25.0            # per datagram, rides out several bus grabs
@@ -92,13 +77,7 @@ class ZuluLoader:
         return {'size': size, 'block_size': bs, 'filename': d[12:76].split(b'\0')[0].decode(errors='replace')}
 
     def read(self, sid, offset, length, progress=None):
-        """Windowed read: same sliding window as write().
-
-        The one-datagram-at-a-time version this replaced ran at the round
-        trip time, ~99 KB/s on the S950's link, which made the read-back
-        verification six times more expensive than the write it checks.
-        With the window it tracks the write path.
-        """
+        """Windowed read: same sliding window as write()."""
         chunks = [(offset + i, min(1400, length - i))
                   for i in range(0, length, 1400)]
         out = [None] * len(chunks)
