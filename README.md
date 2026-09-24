@@ -20,7 +20,7 @@ later) is the separate S950 web editor repo.
 - Added: `src/SuperOS_loader.cpp` / `.h`, plus hooks in `src/ZuluSCSI.cpp`
   (main loop, Wi-Fi join), `src/ZuluSCSI_disk.cpp` and
   `lib/ZuluSCSI_platform_RP2MCU/ZuluSCSI_platform_network.cpp`. One commit,
-  ~600 lines. Design notes: [SUPEROS.md](SUPEROS.md).
+  ~600 lines.
 - **You are flashing a third-party build.** To get back to stock, flash an
   official ZuluSCSI release the same way you flashed this one; nothing here
   changes the card layout or the images on it.

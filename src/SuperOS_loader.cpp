@@ -1,6 +1,6 @@
 // SuperOS loader: see SuperOS_loader.h.
 //
-// Threading model (see SUPEROS.md, "Core 1 SD writer"):
+// Threading model:
 //   core 0: cyw43 driver (rx callback, platform_network_send, cyw43_arch_poll), protocol
 //           parsing, WRITE staging into RAM slots, replies, READ/INFO (when the queue is
 //           drained), prefetch invalidation, all logging.
@@ -18,7 +18,9 @@
 #include <stdio.h>
 #include <Arduino.h>
 
-#ifdef ZULUSCSI_NETWORK
+// Built only for the Pico 2 W DaynaPORT target: its ~105 KB of buffers do not fit the
+// RAM left on the other network targets (Pico W, Blaster), which get the stubs below.
+#ifdef ZULUSCSI_PICO_2_DAYNAPORT
 extern "C" {
 #include <cyw43.h>
 #include <pico/cyw43_arch.h>
