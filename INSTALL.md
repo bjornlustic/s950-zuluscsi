@@ -16,19 +16,8 @@ the S950's SCSI disk and also accepts writes to that disk over Wi-Fi.
 
 ## 2. Get the firmware
 
-There is no GitHub release. Firmware comes from the build server
-(GitHub Actions) or from your own build.
-
-**Download** (needs a free GitHub account):
-
-1. Open <https://github.com/bjornlustic/s950-zuluscsi/actions>.
-2. Click the newest run of "Build ZuluSCSI firmware" on branch `superos`
-   with a green tick.
-3. Under **Artifacts**, download **ZuluSCSI UF2s** and unzip it.
-4. Use the file named `ZuluSCSI_Pico_2_DaynaPORT_<date>_<version>.uf2`.
-   Ignore the others.
-
-Artifacts expire after a while. If the list is empty, build it yourself.
+**Download:** `SuperOS-ZuluSCSI-Pico2W-1.0.uf2` from
+<https://github.com/bjornlustic/s950-zuluscsi/releases/latest>.
 
 **Build** (needs Python and PlatformIO):
 
